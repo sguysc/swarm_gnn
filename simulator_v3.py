@@ -89,20 +89,27 @@ class Simulator(object):
         self.range_len = range_len
         self.memory_size = memory_size
         self.fsize = (max_x, max_y)
+        init_locations = []
         for rid in range(num_robots):
             # sample an initial location for this robot. the -0.1 is so we don't have a robot on the max index
+            [x, y] = np.random.randint(0, 40, 2)
+            while([x,y] in init_locations):
+                [x, y] = np.random.randint(0, 40, 2)
+                
             self.robots[rid,0] = rid
-            self.robots[rid,1] = np.around((max_x-0.1)*np.random.rand(), decimals=1)
-            self.robots[rid,2] = np.around((max_y-0.1)*np.random.rand(), decimals=1)
+            self.robots[rid,1] = x
+            self.robots[rid,2] = y
         
-        self.map = th.zeros(max_x, max_y)
+        self.map = th.zeros(max_x, max_y, requires_grad=True)
+        self.map_list = self.robots[:,1:3]
+        
         self.create_graph()
             
     def create_graph(self, first_time=True):
-        breakpoint()
+        # breakpoint()
         # get all current locations.
         # X = self.robots[:, 1:3]
-        # dist_sq = th.sqrt(th.sum((X[:, np.newaxis, :] - X[np.newaxis, :, :]) ** 2, axis = -1))
+        # dist_sq = th.cdist(X,X,p=2)
         # dist_sq[dist_sq > self.range_len] = 0
         # self.G = dgl.from_networkx(dist_sq)
         # if(first_time):
@@ -150,13 +157,20 @@ class Simulator(object):
             
         self.create_graph(first_time=False)
         
-    def get_pose_state(self):
-        self.map *= 0.
+    def get_state_map(self):
+        # self.map *= 0.
+        # breakpoint()
+        zero_mat = th.zeros(self.map.shape)
+        self.map = th.matmul(self.map, zero_mat)
         one = th.ones(1, dtype=th.int)
         for r in range(self.n):
             # if it is in a cell of 1x1, mark it
-            self.map[self.robots[r, 1].int(), self.robots[r, 2].int()] = one 
+            self.map[self.robots[r, 1].int(), self.robots[r, 2].int()] = one #d_x[r]/d_x[r]
         return self.map
+    
+    def get_state_list(self):
+        self.map_list = self.robots[:,1:3]
+        return self.map_list
         
 if __name__=='__main__':
     w = Simulator(num_robots=5, memory_size=10, range_len=5.)
