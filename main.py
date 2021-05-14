@@ -6,14 +6,15 @@ Created on Thu May 13 15:34:46 2021
 """
 
 import numpy as np
-import dgl
+# import dgl
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from dgl.nn import GraphConv
 import PIL.Image
 
-import simulator as sim
+# import simulator as sim
+import simulator_v2 as sim
 
 
 # seed for reproducibility
