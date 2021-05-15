@@ -9,76 +9,6 @@ import numpy as np
 import networkx as nx
 import dgl
 import torch as th
-import PIL.Image
-# from dgl.data import DGLDataset
-
-# class MyDataset(DGLDataset):
-#     _fname = 'pic1.png'
-#     _max_size = 40
-#     """ Template for customizing graph datasets in DGL.
-
-#     Parameters
-#     ----------
-#     url : str
-#         URL to download the raw dataset
-#     raw_dir : str
-#         Specifying the directory that will store the
-#         downloaded data or the directory that
-#         already stores the input data.
-#         Default: ~/.dgl/
-#     save_dir : str
-#         Directory to save the processed dataset.
-#         Default: the value of `raw_dir`
-#     force_reload : bool
-#         Whether to reload the dataset. Default: False
-#     verbose : bool
-#         Whether to print out progress information
-#     """
-#     def __init__(self,
-#                   url=None,
-#                   raw_dir=None,
-#                   save_dir=None,
-#                   force_reload=False,
-#                   verbose=False):
-#         super(MyDataset, self).__init__(name='dataset_name',
-#                                         url=url,
-#                                         raw_dir=raw_dir,
-#                                         save_dir=save_dir,
-#                                         force_reload=force_reload,
-#                                         verbose=verbose)
-
-#     def download(self):
-#         # download raw data to local disk
-#         pass
-
-#     def process(self):
-#         # process data to a list of graphs and a list of labels
-#         self.ref_img = PIL.Image.open(self._fname)
-#         self.ref_img.thumbnail((self._max_size, self._max_size), PIL.Image.ANTIALIAS)
-#         self.ref_img = 1.0-th.float32(self.ref_img)
-#         self.number_of_robots = self.ref_img.sum().int()
-
-#         self.graphs, self.label = self._load_graph(mat_path)
-
-#     def __getitem__(self, idx):
-#         # get one example by index
-#         pass
-
-#     def __len__(self):
-#         # number of data examples
-#         pass
-
-#     def save(self):
-#         # save processed data to directory `self.save_path`
-#         pass
-
-#     def load(self):
-#         # load processed data from directory `self.save_path`
-#         pass
-
-#     def has_cache(self):
-#         # check whether there are processed data in `self.save_path`
-#         pass
         
 # helper class, this is essentialy the simulator
 class Simulator(object):
@@ -89,18 +19,19 @@ class Simulator(object):
         self.range_len = range_len
         self.memory_size = memory_size
         self.fsize = (max_x, max_y)
+        self.map = th.zeros(max_x, max_y, requires_grad=True)
         init_locations = []
         for rid in range(num_robots):
             # sample an initial location for this robot. the -0.1 is so we don't have a robot on the max index
-            [x, y] = np.random.randint(0, 40, 2)
+            [x, y] = np.random.randint(0, max_x, 2)
             while([x,y] in init_locations):
-                [x, y] = np.random.randint(0, 40, 2)
+                [x, y] = np.random.randint(0, max_x, 2)
                 
             self.robots[rid,0] = rid
             self.robots[rid,1] = x
             self.robots[rid,2] = y
+            self.map[x,y] = 1
         
-        self.map = th.zeros(max_x, max_y, requires_grad=True)
         self.map_list = self.robots[:,1:3]
         
         self.create_graph()
@@ -112,15 +43,20 @@ class Simulator(object):
         # dist_sq = th.cdist(X,X,p=2)
         # dist_sq[dist_sq > self.range_len] = 0
         # self.G = dgl.from_networkx(dist_sq)
-        # if(first_time):
-        X = self.robots[:, 1:3].detach().numpy()
-        # create a distance matrix
-        dist_sq = np.sqrt(np.sum((X[:, np.newaxis, :] - X[np.newaxis, :, :]) ** 2, axis = -1))
-        # clear all the connections from robots that are too far away
-        dist_sq[dist_sq > self.range_len] = 0.
-        # create the graph connections
-        self.Gnx = nx.from_numpy_matrix(dist_sq)
-        self.G = dgl.from_networkx(self.Gnx)
+        if(first_time):
+            X = self.robots[:, 1:3].detach().numpy()
+            # create a distance matrix
+            dist_sq = np.sqrt(np.sum((X[:, np.newaxis, :] - X[np.newaxis, :, :]) ** 2, axis = -1))
+            # clear all the connections from robots that are too far away
+            dist_sq[dist_sq > self.range_len] = 0.
+            # create the graph connections
+            self.Gnx = nx.from_numpy_matrix(dist_sq)
+            self.G = dgl.from_networkx(self.Gnx)
+            # GUY TODO: check this, it is meant to allow for zero degree-in nodes (in case every
+            # other node is too far)
+            self.G = dgl.add_self_loop(self.G)
+        # breakpoint()
+        # self.G = dgl.transform.to_bidirected(self.G, readonly=False)
         # else:
             
         
@@ -139,20 +75,21 @@ class Simulator(object):
         # self.G.ndata['id']    = self.robots[:, 0]
         #th.linspace(0, self.G.num_nodes()-1, self.G.num_nodes(), dtype=th.int32).reshape(self.G.num_nodes(),-1)
         # GUY TODO: get the true ranges. for now, we treat all as equal
-        self.G.edata['range'] = th.ones(self.G.num_edges(), 1)
-        # GUY TODO: check this, it is meant to allow for zero degree-in nodes (in case every
-        # other node is too far)
-        self.G = dgl.add_self_loop(self.G)
+        # self.G.edata['range'] = th.ones(self.G.num_edges(), 1)
+        
         
     def update(self, d_x, d_y, d_data):
         # GUY TODO: add some "physics" here. meaning, if they are too close, maybe
         # just get them to be tangent.
         self.robots[:, 1] += d_x
-        self.robots[self.robots[:, 1] > self.fsize[0], : ] = self.fsize[0]
-        self.robots[self.robots[:, 1] < 0, : ] = 0
+        # self.robots[self.robots[:, 1] > self.fsize[0], : ] = self.fsize[0]
+        # self.robots[self.robots[:, 1] < 0, : ] = 0
         self.robots[:, 2] += d_y
-        self.robots[self.robots[:, 2] > self.fsize[1], : ] = self.fsize[1]
-        self.robots[self.robots[:, 2] < 0, : ] = 0
+        # self.robots[self.robots[:, 2] > self.fsize[1], : ] = self.fsize[1]
+        # self.robots[self.robots[:, 2] < 0, : ] = 0
+        # truncate values that are off the field
+        self.robots[:, 1] = th.clamp(self.robots[:, 1], min=0., max=self.fsize[0])
+        self.robots[:, 2] = th.clamp(self.robots[:, 2], min=0., max=self.fsize[1])
         self.robots[:, 3:] += d_data
             
         self.create_graph(first_time=False)

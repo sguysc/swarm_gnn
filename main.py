@@ -29,7 +29,7 @@ ref_img = 1.0-np.float32(ref_img)
 number_of_robots = int(ref_img.sum())
 ref_img = torch.tensor(ref_img)
 # saving also as the locations that the robot has
-ref_array = torch.nonzero(ref_img)
+ref_array = torch.nonzero(ref_img).float()
 
 # create the simulator
 my_sim = sim.Simulator(num_robots=number_of_robots, memory_size=64, \
@@ -67,10 +67,28 @@ def pairwise_dist(x, y):
     return P
 
 def NN_loss(x, y, dim=0):
-    breakpoint()
+    # breakpoint()
     dist = pairwise_dist(x.float(), y.float())
     values, indices = dist.min(dim=dim)
     return values.mean(), values
+
+#https://stats.stackexchange.com/questions/276497/maximum-mean-discrepancy-distance-distribution
+def MMD_loss(x, y):
+    alpha = 0.1
+    xx, yy, zz = torch.mm(x,x.t()), torch.mm(y,y.t()), torch.mm(x,y.t())
+
+    rx = (xx.diag().unsqueeze(0).expand_as(xx))
+    ry = (yy.diag().unsqueeze(0).expand_as(yy))
+
+    K = torch.exp(- alpha * (rx.t() + rx - 2*xx))
+    L = torch.exp(- alpha * (ry.t() + ry - 2*yy))
+    P = torch.exp(- alpha * (rx.t() + ry - 2*zz))
+
+    B = 10.
+    beta = (1./(B*(B-1)))
+    gamma = (2./(B*B)) 
+
+    return beta * (torch.sum(K)+torch.sum(L)) - gamma * torch.sum(P)
     
 def train(g, model):
     # breakpoint()
@@ -84,12 +102,12 @@ def train(g, model):
     # val_mask = g.ndata['val_mask']
     # test_mask = g.ndata['test_mask']
     for e in range(100):
-        # breakpoint()
+        breakpoint()
         # Forward
         logits = model(g, features)
         # first two are dx, dy. the rest is d_data
-        d_x = step_size * logits[:,0]
-        d_y = step_size * logits[:,1]
+        d_x    = torch.sign( logits[:,0] )
+        d_y    = torch.sign( logits[:,1] )
         d_data = logits[:,2:]
         # breakpoint()
         my_sim.update(d_x, d_y, d_data)
@@ -108,14 +126,16 @@ def train(g, model):
         # output = loss(truth_pose_list, ref_array) #.mse_loss
         # output = loss(truth_pose, ref_img) #.mse_loss
         # sort_arrays(truth_pose_list, ref_array)
-        loss, vals = NN_loss(truth_pose_list, ref_array)
+        # loss, vals = NN_loss(truth_pose_list, ref_array)
+        loss = MMD_loss(truth_pose_list, ref_array)
+        train_acc = 0.
         
         print(loss)
         # print(output)
         
         # Compute accuracy on training/validation/test
         # train_acc = (truth_pose == ref_img).float().mean()
-        train_acc = vals.float().mean()
+        # train_acc = vals.float().mean()
         # val_acc = (pred[val_mask] == labels[val_mask]).float().mean()
         # test_acc = (pred[test_mask] == labels[test_mask]).float().mean()
 
