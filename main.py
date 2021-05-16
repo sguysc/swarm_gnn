@@ -102,7 +102,7 @@ def train(g, model):
     # val_mask = g.ndata['val_mask']
     # test_mask = g.ndata['test_mask']
     for e in range(100):
-        breakpoint()
+        # breakpoint()
         # Forward
         logits = model(g, features)
         # first two are dx, dy. the rest is d_data

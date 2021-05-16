@@ -37,32 +37,48 @@ class Simulator(object):
         self.create_graph()
             
     def create_graph(self, first_time=True):
-        # breakpoint()
         # get all current locations.
-        # X = self.robots[:, 1:3]
-        # dist_sq = th.cdist(X,X,p=2)
-        # dist_sq[dist_sq > self.range_len] = 0
-        # self.G = dgl.from_networkx(dist_sq)
+        # option 1:
+        # X = self.robots[:, 1:3].detach().numpy()
+        # # create a distance matrix
+        # dist_sq = np.sqrt(np.sum((X[:, np.newaxis, :] - X[np.newaxis, :, :]) ** 2, axis = -1))
+        # # clear all the connections from robots that are too far away
+        # dist_sq[dist_sq > self.range_len] = 0.
+        # # create the graph connections
+        # self.Gnx = nx.from_numpy_matrix(dist_sq)
+        # self.G = dgl.from_networkx(self.Gnx)
+        # option 2:
+        X = self.robots[:, 1:3]
+        # create a distance matrix
+        dist_sq = th.cdist(X, X, p=2.0)
+        # adjacency matrix
+        adj_matrix = th.where(dist_sq <= self.range_len, dist_sq, th.zeros_like(dist_sq))
+        adj_matrix = th.where(adj_matrix > 0., th.ones_like(dist_sq), adj_matrix)
+        # list of nodes connected
+        conn_nodes = th.nonzero(adj_matrix)
         if(first_time):
-            X = self.robots[:, 1:3].detach().numpy()
-            # create a distance matrix
-            dist_sq = np.sqrt(np.sum((X[:, np.newaxis, :] - X[np.newaxis, :, :]) ** 2, axis = -1))
-            # clear all the connections from robots that are too far away
-            dist_sq[dist_sq > self.range_len] = 0.
-            # create the graph connections
-            self.Gnx = nx.from_numpy_matrix(dist_sq)
-            self.G = dgl.from_networkx(self.Gnx)
+            # create a graph, src nodes -> dest nodes. they are bi-directional
+            self.G = dgl.graph((conn_nodes[:,0], conn_nodes[:,1]))
+            # breakpoint()
             # GUY TODO: check this, it is meant to allow for zero degree-in nodes (in case every
             # other node is too far)
+            self.G = dgl.add_self_loop(self.G)
+        else:
+            # use the same graph, remove all nodes and re-create them. don't know if that's the right thing to do
+            # edge_ids = th.arange(0, self.G.num_edges())
+            # self.G.remove_edges(edge_ids)
+            # # add the new ones
+            # self.G = dgl.add_edges(self.G, conn_nodes[:,0], conn_nodes[:,1])
+            # self.G = dgl.add_self_loop(self.G)
+            self.G = dgl.graph((conn_nodes[:,0], conn_nodes[:,1]))
             self.G = dgl.add_self_loop(self.G)
         # breakpoint()
         # self.G = dgl.transform.to_bidirected(self.G, readonly=False)
         # else:
             
-        
         # add the features to the nodes and edges
-        self.G.ndata['x']     = self.robots[:, 1]
-        self.G.ndata['y']     = self.robots[:, 2]
+        # self.G.ndata['x']     = self.robots[:, 1]
+        # self.G.ndata['y']     = self.robots[:, 2]
         # data is essentially all we throw to the neural network. we don't want
         # the nn to learn things using the position / id
         # if(first_time):
@@ -79,17 +95,31 @@ class Simulator(object):
         
         
     def update(self, d_x, d_y, d_data):
+        # option 1:
         # GUY TODO: add some "physics" here. meaning, if they are too close, maybe
         # just get them to be tangent.
-        self.robots[:, 1] += d_x
+        # self.robots[:, 1] += d_x
         # self.robots[self.robots[:, 1] > self.fsize[0], : ] = self.fsize[0]
         # self.robots[self.robots[:, 1] < 0, : ] = 0
-        self.robots[:, 2] += d_y
+        # self.robots[:, 2] += d_y
         # self.robots[self.robots[:, 2] > self.fsize[1], : ] = self.fsize[1]
         # self.robots[self.robots[:, 2] < 0, : ] = 0
         # truncate values that are off the field
-        self.robots[:, 1] = th.clamp(self.robots[:, 1], min=0., max=self.fsize[0])
-        self.robots[:, 2] = th.clamp(self.robots[:, 2], min=0., max=self.fsize[1])
+        # option 2:
+        self.robots[:, 1] = th.clamp(self.robots[:, 1] + d_x, min=0., max=self.fsize[0])
+        self.robots[:, 2] = th.clamp(self.robots[:, 2] + d_y, min=0., max=self.fsize[1])
+        # option 3:
+        # self.robots[:, 1] += d_x
+        # mask = self.robots[:, 1].ge(0.0) 
+        # self.robots[:, 1] = th.masked_select(self.robots[:, 1], mask)
+        # mask = self.robots[:, 1].le( self.fsize[0] )
+        # self.robots[:, 1] = th.masked_select(self.robots[:, 1], mask)
+        # self.robots[:, 2] += d_y
+        # mask = self.robots[:, 2].ge(0.0) 
+        # self.robots[:, 2] = th.masked_select(self.robots[:, 2], mask)
+        # mask = self.robots[:, 2].le( self.fsize[1] )
+        # self.robots[:, 2] = th.masked_select(self.robots[:, 2], mask)
+        
         self.robots[:, 3:] += d_data
             
         self.create_graph(first_time=False)
