@@ -6,20 +6,21 @@ Created on Thu May 13 15:53:31 2021
 """
 
 import numpy as np
-import networkx as nx
 import dgl
 import torch as th
+
+import matplotlib.pyplot as plt
         
 # helper class, this is essentialy the simulator
 class Simulator(object):
     def __init__(self, num_robots=10, memory_size=10, range_len=2., max_x=10, max_y=10):
 
-        self.robots = th.zeros(num_robots, 1+2+memory_size)
+        self.robots = th.zeros(num_robots, 1+2+memory_size, requires_grad=False)
         self.n = num_robots
         self.range_len = range_len
         self.memory_size = memory_size
         self.fsize = (max_x, max_y)
-        self.map = th.zeros(max_x, max_y, requires_grad=True)
+        # self.map = th.zeros(max_x, max_y, requires_grad=True)
         init_locations = []
         for rid in range(num_robots):
             # sample an initial location for this robot. the -0.1 is so we don't have a robot on the max index
@@ -30,9 +31,12 @@ class Simulator(object):
             self.robots[rid,0] = rid
             self.robots[rid,1] = x
             self.robots[rid,2] = y
-            self.map[x,y] = 1
+            # self.map[x,y] = 1
         
         self.map_list = self.robots[:,1:3]
+        
+        self.fig, self.axs = plt.subplots()
+
         
         self.create_graph()
             
@@ -72,9 +76,6 @@ class Simulator(object):
             # self.G = dgl.add_self_loop(self.G)
             self.G = dgl.graph((conn_nodes[:,0], conn_nodes[:,1]))
             self.G = dgl.add_self_loop(self.G)
-        # breakpoint()
-        # self.G = dgl.transform.to_bidirected(self.G, readonly=False)
-        # else:
             
         # add the features to the nodes and edges
         # self.G.ndata['x']     = self.robots[:, 1]
@@ -82,7 +83,7 @@ class Simulator(object):
         # data is essentially all we throw to the neural network. we don't want
         # the nn to learn things using the position / id
         # if(first_time):
-        self.G.ndata['data']  = self.robots[:, 3:]
+        self.G.ndata['data']  = self.robots[:, 3:].detach()
         # else:
         #     data = [ [r.data.tolist() ] for r in self.robots]
         #     data = np.array(data).squeeze()
@@ -98,46 +99,50 @@ class Simulator(object):
         # option 1:
         # GUY TODO: add some "physics" here. meaning, if they are too close, maybe
         # just get them to be tangent.
-        # self.robots[:, 1] += d_x
-        # self.robots[self.robots[:, 1] > self.fsize[0], : ] = self.fsize[0]
-        # self.robots[self.robots[:, 1] < 0, : ] = 0
-        # self.robots[:, 2] += d_y
-        # self.robots[self.robots[:, 2] > self.fsize[1], : ] = self.fsize[1]
-        # self.robots[self.robots[:, 2] < 0, : ] = 0
-        # truncate values that are off the field
         # option 2:
-        self.robots[:, 1] = th.clamp(self.robots[:, 1] + d_x, min=0., max=self.fsize[0])
-        self.robots[:, 2] = th.clamp(self.robots[:, 2] + d_y, min=0., max=self.fsize[1])
-        # option 3:
-        # self.robots[:, 1] += d_x
-        # mask = self.robots[:, 1].ge(0.0) 
-        # self.robots[:, 1] = th.masked_select(self.robots[:, 1], mask)
-        # mask = self.robots[:, 1].le( self.fsize[0] )
-        # self.robots[:, 1] = th.masked_select(self.robots[:, 1], mask)
-        # self.robots[:, 2] += d_y
-        # mask = self.robots[:, 2].ge(0.0) 
-        # self.robots[:, 2] = th.masked_select(self.robots[:, 2], mask)
-        # mask = self.robots[:, 2].le( self.fsize[1] )
-        # self.robots[:, 2] = th.masked_select(self.robots[:, 2], mask)
+        # breakpoint()
+        # the feature inputs must not have gradients (because we don't want to learn them)
+        # but the features are self.robots. so basically we update in temp variable and
+        # then get them back;
+        tmp = self.robots.detach()
+        tmp[:, 1]   = th.clamp(tmp[:, 1] + d_x , min=0., max=self.fsize[0])
+        tmp[:, 2]   = th.clamp(tmp[:, 2] + d_y , min=0., max=self.fsize[1]) 
+        tmp[:, 3:] += d_data
+
+        # self.robots[:, 3:] += d_data
         
-        self.robots[:, 3:] += d_data
+        self.robots = tmp.detach()
             
         self.create_graph(first_time=False)
         
-    def get_state_map(self):
-        # self.map *= 0.
-        # breakpoint()
-        zero_mat = th.zeros(self.map.shape)
-        self.map = th.matmul(self.map, zero_mat)
-        one = th.ones(1, dtype=th.int)
-        for r in range(self.n):
-            # if it is in a cell of 1x1, mark it
-            self.map[self.robots[r, 1].int(), self.robots[r, 2].int()] = one #d_x[r]/d_x[r]
-        return self.map
+    # def get_state_map(self):
+    #     # self.map *= 0.
+    #     # breakpoint()
+    #     zero_mat = th.zeros(self.map.shape)
+    #     self.map = th.matmul(self.map, zero_mat)
+    #     one = th.ones(1, dtype=th.int)
+    #     for r in range(self.n):
+    #         # if it is in a cell of 1x1, mark it
+    #         self.map[self.robots[r, 1].int(), self.robots[r, 2].int()] = one #d_x[r]/d_x[r]
+    #     return self.map
     
-    def get_state_list(self):
-        self.map_list = self.robots[:,1:3]
+    def get_new_state_list(self, d_xy):
+        self.map_list = self.robots[:,1:3] + d_xy
         return self.map_list
+    
+    def plot(self, ext_list=None, txt=''):
+        if(ext_list is None):
+            X = self.robots[:, 1:3]
+        else:
+            X = ext_list
+        
+        self.axs.scatter(X[:,1], X[:,0], marker='s', alpha=0.5, label=txt)
+        plt.xlabel("X")
+        plt.ylabel("Y")
+        self.axs.set_ylim(self.fsize[1], 0)  # 
+        plt.legend(loc='upper left')
+        plt.show()
+        
         
 if __name__=='__main__':
     w = Simulator(num_robots=5, memory_size=10, range_len=5.)

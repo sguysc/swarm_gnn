@@ -36,7 +36,7 @@ my_sim = sim.Simulator(num_robots=number_of_robots, memory_size=64, \
                        range_len=3., max_x=max_size, max_y=max_size)
 step_size = torch.tensor(0.1)
 
-torch.autograd.set_detect_anomaly(True)
+# torch.autograd.set_detect_anomaly(True)
 
 class GCN(nn.Module):
     def __init__(self, in_feats, h_feats, num_outputs):
@@ -96,25 +96,25 @@ def train(g, model):
     # best_val_acc = 0
     # best_test_acc = 0
 
-    features = g.ndata['data']
     # labels = g.ndata['label']
     # train_mask = g.ndata['train_mask']
     # val_mask = g.ndata['val_mask']
     # test_mask = g.ndata['test_mask']
-    for e in range(100):
+    # truth_pose_list = my_sim.get_state_list()
+    for e in range(1000):
+        features = g.ndata['data']
         # breakpoint()
         # Forward
         logits = model(g, features)
         # first two are dx, dy. the rest is d_data
-        d_x    = torch.sign( logits[:,0] )
-        d_y    = torch.sign( logits[:,1] )
+        d_x    =  step_size * logits[:,0]  # torch.sign(
+        d_y    =  step_size * logits[:,1]  # torch.sign(
+        # d_x    =  torch.sign( logits[:,0] ) 
+        # d_y    =  torch.sign( logits[:,1] )
         d_data = logits[:,2:]
         # breakpoint()
-        my_sim.update(d_x, d_y, d_data)
-        # truth_pose = my_sim.get_state_map()
-        truth_pose_list = my_sim.get_state_list()
-        # # Compute prediction
-        # pred = logits.argmax(1)
+        # get the new poses with the gradients
+        truth_pose_list = my_sim.get_new_state_list(logits[:,0:2])
 
         # Compute loss
         # Note that you should only compute the losses of the nodes in the training set.
@@ -128,9 +128,9 @@ def train(g, model):
         # sort_arrays(truth_pose_list, ref_array)
         # loss, vals = NN_loss(truth_pose_list, ref_array)
         loss = MMD_loss(truth_pose_list, ref_array)
-        train_acc = 0.
+        # train_acc = 0.
         
-        print(loss)
+        # print(loss)
         # print(output)
         
         # Compute accuracy on training/validation/test
@@ -146,15 +146,24 @@ def train(g, model):
 
         # Backward
         optimizer.zero_grad()
-        loss.backward(retain_graph=True)
+        if(e == 0):
+            loss.backward(retain_graph=True)
+        else:
+            loss.backward()
         optimizer.step()
 
-        if e % 5 == 0:
-            print('In epoch {}, loss: {:.3f}, train acc: {:.3f}'.format(
-                e, loss, train_acc))
+        # now that we've done computing the loss with gradients, update the simulation.
+        # the features are not supposed to have gradients
+        my_sim.update(d_x, d_y, d_data)
+        
+        if e % 50 == 0:
+            print('In epoch {}, loss: {:.3f}'.format(
+                e, loss)) #, train acc: {:.3f} , train_acc
             
-
+my_sim.plot(ext_list=ref_array, txt='ref.')
+my_sim.plot(txt='init.')
 # Create the model with given dimensions
 outputs = 2 + my_sim.memory_size # dx, dy, d_data
 model = GCN(my_sim.G.ndata['data'].shape[1], 16, outputs)
 train(my_sim.G, model)
+my_sim.plot(txt='final')
