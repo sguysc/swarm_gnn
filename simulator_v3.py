@@ -8,9 +8,10 @@ Created on Thu May 13 15:53:31 2021
 import numpy as np
 import dgl
 import torch as th
+import dgl.function as fn
 
 import matplotlib.pyplot as plt
-        
+
 # helper class, this is essentialy the simulator
 class Simulator(object):
     def __init__(self, num_robots=10, memory_size=10, range_len=2., max_x=10, max_y=10):
@@ -21,42 +22,48 @@ class Simulator(object):
         self.memory_size = memory_size
         self.fsize = (max_x, max_y)
         # self.map = th.zeros(max_x, max_y, requires_grad=True)
-        init_locations = []
-        for rid in range(num_robots):
-            # sample an initial location for this robot. the -0.1 is so we don't have a robot on the max index
-            [x, y] = np.random.randint(0, max_x, 2)
-            while([x,y] in init_locations):
-                [x, y] = np.random.randint(0, max_x, 2)
-                
-            self.robots[rid,0] = rid
-            self.robots[rid,1] = x
-            self.robots[rid,2] = y
-            # self.map[x,y] = 1
-        
-        self.map_list = self.robots[:,1:3]
-        
-        self.fig, self.axs = plt.subplots()
 
-        
-        self.create_graph()
-        
+        self.fig, self.axs = plt.subplots()
+        self.last_line = None
+
+        self.randomize()
+        # init_locations = []
+        # for rid in range(num_robots):
+        #     # sample an initial location for this robot. the -0.1 is so we don't have a robot on the max index
+        #     [x, y] = np.random.randint(0, max_x, 2)
+        #     while([x,y] in init_locations):
+        #         [x, y] = np.random.randint(0, max_x, 2)
+        #     init_locations.append([x, y])
+
+        #     self.robots[rid,0] = rid
+        #     self.robots[rid,1] = x
+        #     self.robots[rid,2] = y
+        #     # self.map[x,y] = 1
+
+        # self.map_list = self.robots[:,1:3]
+
+        # self.create_graph()
+
     def randomize(self):
+        print('start randomizing')
         init_locations = []
         for rid in range(self.n):
             # sample an initial location for this robot. the -0.1 is so we don't have a robot on the max index
             [x, y] = np.random.randint(0, self.fsize[0], 2)
             while([x,y] in init_locations):
                 [x, y] = np.random.randint(0, self.fsize[0], 2)
-                
+            init_locations.append([x, y])
+
             self.robots[rid,0] = rid
             self.robots[rid,1] = x
             self.robots[rid,2] = y
             # self.map[x,y] = 1
-            self.create_graph()
-        
+        self.create_graph()
+
+        print('done randomizing')
         self.map_list = self.robots[:,1:3]
-        self.create_graph(first_time=True)
-            
+        self.create_graph(first_time=False)
+
     def create_graph(self, first_time=True):
         # get all current locations.
         # option 1:
@@ -84,6 +91,11 @@ class Simulator(object):
             # GUY TODO: check this, it is meant to allow for zero degree-in nodes (in case every
             # other node is too far)
             self.G = dgl.add_self_loop(self.G)
+
+            if(th.cuda.is_available()):
+                device = th.device("cuda:0" if th.cuda.is_available() else "cpu")
+                if("cpu" not in device ):
+                    self.G = self.G.to(device)
         else:
             # use the same graph, remove all nodes and re-create them. don't know if that's the right thing to do
             # edge_ids = th.arange(0, self.G.num_edges())
@@ -93,7 +105,7 @@ class Simulator(object):
             # self.G = dgl.add_self_loop(self.G)
             self.G = dgl.graph((conn_nodes[:,0], conn_nodes[:,1]))
             self.G = dgl.add_self_loop(self.G)
-            
+
         # add the features to the nodes and edges
         # self.G.ndata['x']     = self.robots[:, 1]
         # self.G.ndata['y']     = self.robots[:, 2]
@@ -101,24 +113,29 @@ class Simulator(object):
         # the nn to learn things using the position / id
         # if(first_time):
         try:
-            self.G.ndata['data']  = self.robots[:, 3:].detach()
+            self.G.ndata['h']  = self.robots[:, 3:].detach()
         except:
             breakpoint()
+
         # else:
         #     data = [ [r.data.tolist() ] for r in self.robots]
         #     data = np.array(data).squeeze()
         #     self.G.ndata['data']  = th.tensor(data)
-            
+
         # self.G.ndata['id']    = self.robots[:, 0]
         #th.linspace(0, self.G.num_nodes()-1, self.G.num_nodes(), dtype=th.int32).reshape(self.G.num_nodes(),-1)
         # GUY TODO: get the true ranges. for now, we treat all as equal
-        # nodes = self.G.all_edges()
-        # tmp  = th.tensor([dist_sq[u,v] for u,v in zip(nodes[0], nodes[1])])
-        # self.G.edata['range'] = tmp
-        
-        # breakpoint()
-        
-        
+        nodes = self.G.all_edges()
+        tmp  = th.tensor([dist_sq[u,v] for u,v in zip(nodes[0], nodes[1])])
+        self.G.edata['w'] = tmp
+
+        # collect features from source nodes and aggregate them in destination nodes
+        # g.ndata['h'] stores the input node features
+        # self.G.update_all(fn.copy_u('h', 'm'), fn.sum('m', 'data'))
+        # g.edata['w'] stores the edge weights
+        self.G.update_all(fn.u_mul_e('h', 'w', 'm'), fn.sum('m', 'data'))
+
+
     def update(self, d_x, d_y, d_data):
         # option 1:
         # GUY TODO: add some "physics" here. meaning, if they are too close, maybe
@@ -130,12 +147,12 @@ class Simulator(object):
         # then get them back;
         tmp = self.robots.detach()
         tmp[:, 1]   = th.clamp(tmp[:, 1] + d_x , min=0., max=self.fsize[0])
-        tmp[:, 2]   = th.clamp(tmp[:, 2] + d_y , min=0., max=self.fsize[1]) 
+        tmp[:, 2]   = th.clamp(tmp[:, 2] + d_y , min=0., max=self.fsize[1])
         tmp[:, 3:] += d_data
         self.robots = tmp.detach()
-            
+
         self.create_graph(first_time=False)
-        
+
     # def get_state_map(self):
     #     # self.map *= 0.
     #     # breakpoint()
@@ -146,27 +163,34 @@ class Simulator(object):
     #         # if it is in a cell of 1x1, mark it
     #         self.map[self.robots[r, 1].int(), self.robots[r, 2].int()] = one #d_x[r]/d_x[r]
     #     return self.map
-    
+
     def get_new_state_list(self, d_xy):
         # the sigmoid is just to make it bounded by -0.5 to +0.5 without losing gradients (like in sign)
         self.map_list = self.robots[:,1:3] + d_xy
         return self.map_list
-    
-    def plot(self, ext_list=None, txt=''):
+
+    def plot(self, ext_list=None, txt='', clear_first=False):
         if(ext_list is None):
             X = self.robots[:, 1:3]
         else:
             X = ext_list
-        
-        self.axs.scatter(X[:,1], X[:,0], marker='s', alpha=0.5, label=txt)
+
+        # self.axs.clear()
+        if(clear_first):
+            if(self.last_line):
+                # line = self.last_line.pop(0)
+                self.last_line.remove()
+            self.last_line = self.axs.scatter(X[:,1], X[:,0], marker='s', alpha=0.5, label=txt)
+        else:
+            self.axs.scatter(X[:,1], X[:,0], marker='s', alpha=0.5, label=txt)
+
         plt.xlabel("X")
         plt.ylabel("Y")
-        self.axs.set_ylim(self.fsize[1], 0)  # 
-        plt.legend(loc='upper left')
+        self.axs.set_ylim(self.fsize[1], 0)  #
+        self.axs.legend(loc='upper left')
         plt.show()
-        
-        
+
+
 if __name__=='__main__':
     w = Simulator(num_robots=5, memory_size=10, range_len=5.)
-        
-        
+

@@ -11,7 +11,6 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from dgl.nn import GraphConv
-import dgl.function as fn
 import PIL.Image
 import matplotlib.pyplot as plt
 
@@ -37,31 +36,45 @@ step_size = torch.tensor(0.1)
 
 # torch.autograd.set_detect_anomaly(True)
 
-class GCNLayer(nn.Module):
-    def __init__(self, in_feats, out_feats):
-        super(GCNLayer, self).__init__()
-        self.linear = nn.Linear(in_feats, out_feats)
+# class GCNLayer(nn.Module):
+#     def __init__(self, in_feats, out_feats):
+#         super(GCNLayer, self).__init__()
+#         self.linear = nn.Linear(in_feats, out_feats)
 
-    def forward(self, g, feature):
-        # Creating a local scope so that all the stored ndata and edata
-        # (such as the `'h'` ndata below) are automatically popped out
-        # when the scope exits.
-        with g.local_scope():
-            g.ndata['h'] = feature
-            g.update_all(gcn_msg, gcn_reduce)
-            h = g.ndata['h']
-            return self.linear(h)
-        
+#     def forward(self, g, feature):
+#         # Creating a local scope so that all the stored ndata and edata
+#         # (such as the `'h'` ndata below) are automatically popped out
+#         # when the scope exits.
+#         with g.local_scope():
+#             g.ndata['h'] = feature
+#             g.update_all(gcn_msg, gcn_reduce)
+#             h = g.ndata['h']
+#             return self.linear(h)
+
 class GCN(nn.Module):
-    def __init__(self, in_feats, h_feats, num_outputs):
+    def __init__(self, in_feats, h_feats1, h_feats2, num_outputs, dropout=0):
         super(GCN, self).__init__()
-        self.conv1 = GraphConv(in_feats, h_feats) # GCNLayer
-        self.conv2 = GraphConv(h_feats, num_outputs) # GCNLayer
+        self.conv1 = GraphConv(in_feats, h_feats1) # GCNLayer
+        self.conv2 = GraphConv(h_feats1, h_feats2) # GCNLayer
+        self.conv3 = GraphConv(h_feats2, num_outputs) # GCNLayer
+        if(dropout):
+            self.dropout = nn.Dropout(p=dropout)
 
     def forward(self, g, in_feat):
         h = self.conv1(g, in_feat)
+        if(self.dropout):
+            h = self.dropout(h)
         h = F.relu(h)
         h = self.conv2(g, h)
+        if(self.dropout):
+            h = self.dropout(h)
+        h = F.relu(h)
+        h = self.conv3(g, h)
+
+        # breakpoint()
+        # fire_rate = 0.8
+        # update_mask = torch.rand(h.shape) <= fire_rate
+        # h = h * update_mask.float()
         return h
 
 # def evaluate(model, graph, features, labels, mask):
@@ -100,33 +113,33 @@ def MMD_loss(x, y):
 
     B = 10.
     beta = (1./(B*(B-1)))
-    gamma = (2./(B*B)) 
+    gamma = (2./(B*B))
 
     return beta * (torch.sum(K)+torch.sum(L)) - gamma * torch.sum(P)
 
 def Energy_loss(x,y):
     n_1 = x.shape[0]
     n_2 = y.shape[0]
-    
+
     a00 = - 1. / (n_1 * n_1)
     a11 = - 1. / (n_2 * n_2)
     a01 = 1. / (n_1 * n_2)
-        
+
     xy = torch.cat((x, y), 0)
     distances = pairwise_dist(xy, xy)
     d_1 = distances[:n_1, :n_1].sum()
     d_2 = distances[-n_2:, -n_2:].sum()
     d_12 = distances[:n_1, -n_2:].sum()
-    
+
     loss = 2 * a01 * d_12 + a00 * d_1 + a11 * d_2
-    
+
     return loss
-    
-def train(sim, model):
+
+def train(sim, model, lr=0.001):
     num_iterations = 1000
     loss_history = np.zeros(num_iterations)
-    
-    optimizer = torch.optim.Adam(model.parameters(), lr=0.01)
+
+    optimizer = torch.optim.Adam(model.parameters(), lr=lr)
     # best_val_acc = 0
     # best_test_acc = 0
 
@@ -146,7 +159,7 @@ def train(sim, model):
         # d_xy    =  torch.sigmoid( logits[:,0:2] ) - 0.5  # torch.sign(
         d_x    =  torch.sigmoid( step_size * logits[:,0] ) - 0.5 #  step_size *
         d_y    =  torch.sigmoid( step_size * logits[:,1] ) - 0.5  # step_size *
-        # d_x    =  torch.sign( logits[:,0] ) 
+        # d_x    =  torch.sign( logits[:,0] )
         # d_y    =  torch.sign( logits[:,1] )
         d_data = logits[:,2:]
         # breakpoint()
@@ -165,16 +178,16 @@ def train(sim, model):
         # sort_arrays(truth_pose_list, ref_array)
         # every 50 iterations, do minimum distance. it helps getting the distribution close
         # to the original reference.
-        if(e % 50 == 1):
-            loss, vals = NN_loss(truth_pose_list, ref_array)
-        else:
-            # loss = MMD_loss(truth_pose_list, ref_array)
-            loss = Energy_loss(truth_pose_list, ref_array)
+        # if(e % 2 == 1):
+        #     loss, vals = NN_loss(truth_pose_list, ref_array)
+        # else:
+        loss = MMD_loss(truth_pose_list, ref_array)
+            # loss = Energy_loss(truth_pose_list, ref_array)
         # train_acc = 0.
-        
+
         # print(loss)
         # print(output)
-        
+
         # Compute accuracy on training/validation/test
         # train_acc = (truth_pose == ref_img).float().mean()
         # train_acc = vals.float().mean()
@@ -197,35 +210,42 @@ def train(sim, model):
         # now that we've done computing the loss with gradients, update the simulation.
         # the features are not supposed to have gradients
         my_sim.update(d_x, d_y, d_data)
-        
+
         if e % 50 == 0:
             print('In epoch {}, loss: {:.3f}'.format(
                 e, loss)) #, train acc: {:.3f} , train_acc
-            
+
         loss_history[e] = loss.detach().numpy()
-    
+
     return loss_history
 
 
-gcn_msg = fn.copy_src(src='h', out='m')
-gcn_reduce = fn.sum(msg='m', out='h')
+# gcn_msg = fn.copy_src(src='h', out='m')
+# gcn_reduce = fn.sum(msg='m', out='h')
 
 # create the simulator
 my_sim = sim.Simulator(num_robots=number_of_robots, memory_size=32, \
                        range_len=5., max_x=max_size, max_y=max_size)
 
+# breakpoint()
 outputs = 2 + my_sim.memory_size # dx, dy, d_data
-model = GCN(my_sim.G.ndata['data'].shape[1], 16, outputs)
+model = GCN(my_sim.G.ndata['data'].shape[1], 128, 128, outputs, dropout=0.2)
 my_sim.plot(ext_list=ref_array, txt='ref.')
 my_sim.plot(txt='init.')
 # plot for the loss history
 fig_h, axs_h = plt.subplots()
 
-for i in range(20):      
-    loss_h = train(my_sim, model)
-    my_sim.plot(txt='final_' + str(i))
+num_epochs = 20
+for i in range(num_epochs):
+    loss_h = train(my_sim, model, lr=1e-4)
+    # if(i==num_epochs-1):
+    my_sim.plot(txt='final_' + str(i), clear_first=True)
+
+    my_sim.fig.savefig('iter' + str(i) + '.png')
     axs_h.plot(loss_h, label='iter_'+str(i) )
     # new random locations
+    if(i == num_epochs-1):
+        break
     my_sim.randomize()
     print('finished epoch #%d' %(i))
 
