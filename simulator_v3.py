@@ -39,6 +39,23 @@ class Simulator(object):
 
         
         self.create_graph()
+        
+    def randomize(self):
+        init_locations = []
+        for rid in range(self.n):
+            # sample an initial location for this robot. the -0.1 is so we don't have a robot on the max index
+            [x, y] = np.random.randint(0, self.fsize[0], 2)
+            while([x,y] in init_locations):
+                [x, y] = np.random.randint(0, self.fsize[0], 2)
+                
+            self.robots[rid,0] = rid
+            self.robots[rid,1] = x
+            self.robots[rid,2] = y
+            # self.map[x,y] = 1
+            self.create_graph()
+        
+        self.map_list = self.robots[:,1:3]
+        self.create_graph(first_time=True)
             
     def create_graph(self, first_time=True):
         # get all current locations.
@@ -83,7 +100,10 @@ class Simulator(object):
         # data is essentially all we throw to the neural network. we don't want
         # the nn to learn things using the position / id
         # if(first_time):
-        self.G.ndata['data']  = self.robots[:, 3:].detach()
+        try:
+            self.G.ndata['data']  = self.robots[:, 3:].detach()
+        except:
+            breakpoint()
         # else:
         #     data = [ [r.data.tolist() ] for r in self.robots]
         #     data = np.array(data).squeeze()
@@ -127,6 +147,7 @@ class Simulator(object):
     #     return self.map
     
     def get_new_state_list(self, d_xy):
+        # the sigmoid is just to make it bounded by -0.5 to +0.5 without losing gradients (like in sign)
         self.map_list = self.robots[:,1:3] + d_xy
         return self.map_list
     
