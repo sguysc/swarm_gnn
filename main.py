@@ -11,6 +11,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from dgl.nn import GraphConv
+import dgl.function as fn
 import PIL.Image
 import matplotlib.pyplot as plt
 
@@ -36,11 +37,26 @@ step_size = torch.tensor(0.1)
 
 # torch.autograd.set_detect_anomaly(True)
 
+class GCNLayer(nn.Module):
+    def __init__(self, in_feats, out_feats):
+        super(GCNLayer, self).__init__()
+        self.linear = nn.Linear(in_feats, out_feats)
+
+    def forward(self, g, feature):
+        # Creating a local scope so that all the stored ndata and edata
+        # (such as the `'h'` ndata below) are automatically popped out
+        # when the scope exits.
+        with g.local_scope():
+            g.ndata['h'] = feature
+            g.update_all(gcn_msg, gcn_reduce)
+            h = g.ndata['h']
+            return self.linear(h)
+        
 class GCN(nn.Module):
     def __init__(self, in_feats, h_feats, num_outputs):
         super(GCN, self).__init__()
-        self.conv1 = GraphConv(in_feats, h_feats, allow_zero_in_degree=True)
-        self.conv2 = GraphConv(h_feats, num_outputs)
+        self.conv1 = GraphConv(in_feats, h_feats) # GCNLayer
+        self.conv2 = GraphConv(h_feats, num_outputs) # GCNLayer
 
     def forward(self, g, in_feat):
         h = self.conv1(g, in_feat)
@@ -87,6 +103,24 @@ def MMD_loss(x, y):
     gamma = (2./(B*B)) 
 
     return beta * (torch.sum(K)+torch.sum(L)) - gamma * torch.sum(P)
+
+def Energy_loss(x,y):
+    n_1 = x.shape[0]
+    n_2 = y.shape[0]
+    
+    a00 = - 1. / (n_1 * n_1)
+    a11 = - 1. / (n_2 * n_2)
+    a01 = 1. / (n_1 * n_2)
+        
+    xy = torch.cat((x, y), 0)
+    distances = pairwise_dist(xy, xy)
+    d_1 = distances[:n_1, :n_1].sum()
+    d_2 = distances[-n_2:, -n_2:].sum()
+    d_12 = distances[:n_1, -n_2:].sum()
+    
+    loss = 2 * a01 * d_12 + a00 * d_1 + a11 * d_2
+    
+    return loss
     
 def train(sim, model):
     num_iterations = 1000
@@ -134,7 +168,8 @@ def train(sim, model):
         if(e % 50 == 1):
             loss, vals = NN_loss(truth_pose_list, ref_array)
         else:
-            loss = MMD_loss(truth_pose_list, ref_array)
+            # loss = MMD_loss(truth_pose_list, ref_array)
+            loss = Energy_loss(truth_pose_list, ref_array)
         # train_acc = 0.
         
         # print(loss)
@@ -171,6 +206,10 @@ def train(sim, model):
     
     return loss_history
 
+
+gcn_msg = fn.copy_src(src='h', out='m')
+gcn_reduce = fn.sum(msg='m', out='h')
+
 # create the simulator
 my_sim = sim.Simulator(num_robots=number_of_robots, memory_size=32, \
                        range_len=5., max_x=max_size, max_y=max_size)
@@ -182,7 +221,7 @@ my_sim.plot(txt='init.')
 # plot for the loss history
 fig_h, axs_h = plt.subplots()
 
-for i in range(2):      
+for i in range(20):      
     loss_h = train(my_sim, model)
     my_sim.plot(txt='final_' + str(i))
     axs_h.plot(loss_h, label='iter_'+str(i) )

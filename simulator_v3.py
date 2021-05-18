@@ -112,7 +112,11 @@ class Simulator(object):
         # self.G.ndata['id']    = self.robots[:, 0]
         #th.linspace(0, self.G.num_nodes()-1, self.G.num_nodes(), dtype=th.int32).reshape(self.G.num_nodes(),-1)
         # GUY TODO: get the true ranges. for now, we treat all as equal
-        # self.G.edata['range'] = th.ones(self.G.num_edges(), 1)
+        # nodes = self.G.all_edges()
+        # tmp  = th.tensor([dist_sq[u,v] for u,v in zip(nodes[0], nodes[1])])
+        # self.G.edata['range'] = tmp
+        
+        # breakpoint()
         
         
     def update(self, d_x, d_y, d_data):
@@ -128,9 +132,6 @@ class Simulator(object):
         tmp[:, 1]   = th.clamp(tmp[:, 1] + d_x , min=0., max=self.fsize[0])
         tmp[:, 2]   = th.clamp(tmp[:, 2] + d_y , min=0., max=self.fsize[1]) 
         tmp[:, 3:] += d_data
-
-        # self.robots[:, 3:] += d_data
-        
         self.robots = tmp.detach()
             
         self.create_graph(first_time=False)
