@@ -52,6 +52,20 @@ elif(what_to_load == 1):
     ref_img[1:5,3] = 1
     number_of_robots = int(ref_img.sum())
     ref_array = th.nonzero(ref_img).float()
+    mean_ref_array = th.tensor([th.mean(ref_array[:,0]), th.mean(ref_array[:,1])])
+
+num_of_nn=3
+# ref_array = th.zeros((ref_array1.shape[0], ref_array1.shape[1]+num_of_nn*2 ))
+# ref_array[:, :2] = th.clone( ref_array1 )
+# X = ref_array[:, :2]
+# dist_sq = th.cdist(X, X, p=2.0)
+# knn = dist_sq.topk(num_of_nn+1, largest=False)
+# j=2 # because of id, x, y
+# for n in range(num_of_nn):
+#     # the first index is itself, so that distance is zero and it doesn't count
+#     ref_array[:, j ]   = X[knn.indices[:, n+1], 0] - ref_array[:, 0 ] # dx
+#     ref_array[:, j+1 ] = X[knn.indices[:, n+1], 1] - ref_array[:, 1 ] # dy
+#     j += 2
 
 step_size = th.tensor(0.1)
 
@@ -199,15 +213,26 @@ def train(sim, model, lr=0.001, num_iterations=1000, save_intermediate=False):
         # get the new poses with the gradients
         truth_pose_list = sim.get_new_state_list( step_size*(th.sigmoid( step_size*logits[:,0:2] ) - .50))
 
+        # truth_pose_list = th.zeros((truth_pose_list1.shape[0], truth_pose_list1.shape[1]+num_of_nn*2 ))
+        # truth_pose_list[:, :2] = th.clone( truth_pose_list1 )
+        # X = truth_pose_list[:, :2]
+        # dist_sq = th.cdist(X, X, p=2.0)
+        # knn = dist_sq.topk(num_of_nn+1, largest=False)
+        # j=2 # because of x, y
+        # for n in range(num_of_nn):
+        #     # the first index is itself, so that distance is zero and it doesn't count
+        #     truth_pose_list[:, j ]   = X[knn.indices[:, n+1], 0] - X[:, 0 ] # dx
+        #     truth_pose_list[:, j+1 ] = X[knn.indices[:, n+1], 1] - X[:, 1 ] # dy
+        #     j += 2
         # Compute loss
         # Note that you should only compute the losses of the nodes in the training set.
         # loss = F.cross_entropy(logits[train_mask], labels[train_mask])
         # err = truth_pose - ref_img
         # loss = th.mean(th.mul(err, err))
 
-        # mse = nn.MSELoss()
+        mse = nn.MSELoss()
         # loss1 = mse(truth_pose_list, ref_array) #.mse_loss
-        # loss = mse(truth_pose_list, mean_ref_array) #.mse_loss
+        loss3 = mse(truth_pose_list, mean_ref_array) #.mse_loss
 
         # output = loss(truth_pose, ref_img) #.mse_loss
         # sort_arrays(truth_pose_list, ref_array)
@@ -228,7 +253,7 @@ def train(sim, model, lr=0.001, num_iterations=1000, save_intermediate=False):
         # loss1 = Energy_loss(truth_pose_list, ref_array)
         kldiv = nn.KLDivLoss()
         loss1 = kldiv(truth_pose_list, ref_array)
-        loss = 1.0*loss2 + loss1
+        loss = loss2 + loss1 + loss3
         # loss = loss1
         # train_acc = 0.
 
@@ -264,8 +289,8 @@ def train(sim, model, lr=0.001, num_iterations=1000, save_intermediate=False):
                 sim.fig.savefig('intermediate/step_' + str(e) + '.png')
 
         if e % 50 == 0:
-            print('In epoch {}, loss: {:.3f} (={:.3f}+{:.3f})'.format(
-                e, loss, loss1, loss2)) #, train acc: {:.3f} , train_acc
+            print('In epoch {}, loss: {:.3f} (={:.3f}+{:.3f}+{:.3f})'.format(
+                e, loss, loss1, loss2, loss3)) #, train acc: {:.3f} , train_acc
 
         loss_history[e] = loss.detach().numpy()
 
@@ -287,7 +312,7 @@ else:
 
 # create the simulator
 my_sim = sim.Simulator(num_robots=number_of_robots, memory_size=32, \
-                       range_len=5., max_x=max_size, max_y=max_size, num_of_nn=3)
+                       range_len=5., max_x=max_size, max_y=max_size, num_of_nn=num_of_nn, seed=ref_array)
 
 # breakpoint()
 outputs = 2 + my_sim.memory_size # dx, dy, d_data
@@ -306,7 +331,7 @@ my_sim.plot(txt='init.', init=True, color='r')
 # plot for the loss history
 fig_h, axs_h = plt.subplots()
 
-num_epochs = 1000
+num_epochs = 10
 save_intermediate = save_intermediate_steps
 for i in range(num_epochs):
     if(i==num_epochs-1):

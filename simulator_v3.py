@@ -14,7 +14,7 @@ import matplotlib.pyplot as plt
 
 # helper class, this is essentialy the simulator
 class Simulator(object):
-    def __init__(self, num_robots=10, memory_size=10, range_len=2., max_x=10, max_y=10, num_of_nn=5):
+    def __init__(self, num_robots=10, memory_size=10, range_len=2., max_x=10, max_y=10, num_of_nn=5, seed=None):
         # id, x, y, (xrel,yrel)*nn, features
         self.robots = th.zeros(num_robots, 1 + 2 + num_of_nn*2 + memory_size, requires_grad=False)
         self.n = num_robots
@@ -34,18 +34,22 @@ class Simulator(object):
 
         # breakpoint()
 
-        self.randomize(first_time=True, keep_init=False)
+        self.randomize(first_time=True, keep_init=False, seed=seed)
         # self.create_graph()
 
-    def randomize(self, first_time=False, keep_init=False):
+    def randomize(self, first_time=False, keep_init=False, seed=None):
         # print('start randomizing')
         if(keep_init == False):
             init_locations = []
             for rid in range(self.n):
-                # sample an initial location for this robot. the -0.1 is so we don't have a robot on the max index
-                [x, y] = np.random.randint(0, self.fsize[0], 2)
-                while([x,y] in init_locations):
+                if(seed is not None):
+                    x = seed[rid, 0]
+                    y = seed[rid, 1]
+                else:
+                    # sample an initial location for this robot. the -0.1 is so we don't have a robot on the max index
                     [x, y] = np.random.randint(0, self.fsize[0], 2)
+                    while([x,y] in init_locations):
+                        [x, y] = np.random.randint(0, self.fsize[0], 2)
                 init_locations.append([x, y])
 
                 self.robots[rid,0] = rid
@@ -70,8 +74,11 @@ class Simulator(object):
         self.map_list = self.robots[:,1:3]
         self.create_graph(first_time=first_time)
 
-    def populate_rel_positions(self):
-        X = self.robots[:, 1:3]
+    def populate_rel_positions(self, data=None):
+        if(data):
+            X = data
+        else:
+            X = self.robots[:, 1:3]
         dist_sq = th.cdist(X, X, p=2.0)
         knn = dist_sq.topk(self.num_of_nn+1, largest=False)
         j=3 # because of id, x, y
