@@ -14,13 +14,17 @@ import matplotlib.pyplot as plt
 
 # helper class, this is essentialy the simulator
 class Simulator(object):
-    def __init__(self, num_robots=10, memory_size=10, range_len=2., max_x=10, max_y=10):
-
-        self.robots = th.zeros(num_robots, 1+2+memory_size, requires_grad=False)
+    def __init__(self, num_robots=10, memory_size=10, range_len=2., max_x=10, max_y=10, num_of_nn=5):
+        # id, x, y, (xrel,yrel)*nn, features
+        self.robots = th.zeros(num_robots, 1 + 2 + num_of_nn*2 + memory_size, requires_grad=False)
         self.n = num_robots
         self.range_len = range_len
         self.memory_size = memory_size
         self.fsize = (max_x, max_y)
+        if(num_of_nn >= num_robots):
+            self.num_of_nn = num_robots-1
+        else:
+            self.num_of_nn = num_of_nn
         # self.map = th.zeros(max_x, max_y, requires_grad=True)
 
         self.fig, self.axs = plt.subplots()
@@ -30,28 +34,52 @@ class Simulator(object):
 
         # breakpoint()
 
-        self.randomize(first_time=True)
+        self.randomize(first_time=True, keep_init=False)
         # self.create_graph()
 
-    def randomize(self, first_time=False):
+    def randomize(self, first_time=False, keep_init=False):
         # print('start randomizing')
-        init_locations = []
-        for rid in range(self.n):
-            # sample an initial location for this robot. the -0.1 is so we don't have a robot on the max index
-            [x, y] = np.random.randint(0, self.fsize[0], 2)
-            while([x,y] in init_locations):
+        if(keep_init == False):
+            init_locations = []
+            for rid in range(self.n):
+                # sample an initial location for this robot. the -0.1 is so we don't have a robot on the max index
                 [x, y] = np.random.randint(0, self.fsize[0], 2)
-            init_locations.append([x, y])
+                while([x,y] in init_locations):
+                    [x, y] = np.random.randint(0, self.fsize[0], 2)
+                init_locations.append([x, y])
 
-            self.robots[rid,0] = rid
-            self.robots[rid,1] = x
-            self.robots[rid,2] = y
-            self.robots[rid,3:] = th.ones(self.memory_size, requires_grad=False)
-            # self.map[x,y] = 1
+                self.robots[rid,0] = rid
+                self.robots[rid,1] = x
+                self.robots[rid,2] = y
+                self.robots[rid,3:3+self.num_of_nn*2] = th.zeros(self.num_of_nn*2, requires_grad=False) # the relative position of 5 closest robots
+                self.robots[rid,3+self.num_of_nn*2:] = th.ones(self.memory_size, requires_grad=False)
+                # self.map[x,y] = 1
+
+            # breakpoint()
+            self.populate_rel_positions()
+
+            self.saved_robots = th.clone(self.robots)
+            # print(self.saved_robots[:, 1:3])
+        else:
+            # load it again
+            self.robots = th.clone(self.saved_robots)
+            self.robots[:, 1:3] += 0.01 * th.randn((self.saved_robots.shape[0], 2))
+            self.populate_rel_positions()
 
         # print('done randomizing')
         self.map_list = self.robots[:,1:3]
         self.create_graph(first_time=first_time)
+
+    def populate_rel_positions(self):
+        X = self.robots[:, 1:3]
+        dist_sq = th.cdist(X, X, p=2.0)
+        knn = dist_sq.topk(self.num_of_nn+1, largest=False)
+        j=3 # because of id, x, y
+        for nn in range(self.num_of_nn):
+            # the first index is itself, so that distance is zero and it doesn't count
+            self.robots[:, j ]   = X[knn.indices[:, nn+1], 0] - self.robots[:, 1 ] # dx
+            self.robots[:, j+1 ] = X[knn.indices[:, nn+1], 1] - self.robots[:, 2 ] # dy
+            j += 2
 
     def create_graph(self, first_time=True):
         # get all current locations.
@@ -119,7 +147,10 @@ class Simulator(object):
         # GUY TODO: get the true ranges. for now, we treat all as equal
         nodes = self.G.all_edges()
         tmp  = th.tensor([dist_sq[u,v] for u,v in zip(nodes[0], nodes[1])])
-        self.G.edata['w'] = tmp
+        # take care of what's about to be NaNs
+        tmp = th.where(tmp < 0.01, 0.01*th.ones_like(tmp), tmp)
+        # in this way, the closer they are, the more weight they'll have
+        self.G.edata['w'] = th.reciprocal(tmp)
 
         # collect features from source nodes and aggregate them in destination nodes
         # g.ndata['h'] stores the input node features
@@ -140,8 +171,10 @@ class Simulator(object):
         tmp = self.robots.detach()
         tmp[:, 1]   = th.clamp(tmp[:, 1] + d_x , min=0., max=self.fsize[0])
         tmp[:, 2]   = th.clamp(tmp[:, 2] + d_y , min=0., max=self.fsize[1])
-        tmp[:, 3:] += d_data
+        # not updating the rel positions, only the features
+        tmp[:, 3+self.num_of_nn*2:] += d_data
         self.robots = tmp.detach()
+        self.populate_rel_positions()
 
         self.create_graph(first_time=False)
 
@@ -183,6 +216,7 @@ class Simulator(object):
         plt.xlabel("X")
         plt.ylabel("Y")
         self.axs.set_ylim(self.fsize[1], 0)  #
+        self.axs.set_xlim(0, self.fsize[0])
         self.axs.legend(loc='upper left')
         plt.show()
 
