@@ -159,7 +159,8 @@ def Distance_Penalty_loss(x, ignore):
     # loss = inv_x.sum()
     # breakpoint()
     # option 2: the worst case of them should be minimzed
-    loss = nn.functional.softmax(inv_x).max()
+    loss = nn.functional.softmax(inv_x).norm(dim=0)
+    # loss = inv_x.max()
 
     return loss
 
@@ -179,7 +180,7 @@ def train(sim, model, lr=0.001, num_iterations=1000):
         # get the new graph
         g = sim.G
         features = g.ndata['data']
-        # breakpoint()
+
         # Forward
         logits = model(g, features)
         # first two are dx, dy. the rest is d_data
@@ -187,7 +188,7 @@ def train(sim, model, lr=0.001, num_iterations=1000):
         d_x    =  1.0*torch.sigmoid( step_size * logits[:,0] ) - 0.5 #  step_size *
         d_y    =  1.0*torch.sigmoid( step_size * logits[:,1] ) - 0.5  # step_size *
         d_data = logits[:,2:]
-        # breakpoint()
+
         # get the new poses with the gradients
         truth_pose_list = my_sim.get_new_state_list( 1.0*torch.sigmoid( step_size *logits[:,0:2] ) - 0.5)
 
@@ -196,9 +197,9 @@ def train(sim, model, lr=0.001, num_iterations=1000):
         # loss = F.cross_entropy(logits[train_mask], labels[train_mask])
         # err = truth_pose - ref_img
         # loss = torch.mean(torch.mul(err, err))
-        # breakpoint()
+
         # mse = nn.MSELoss()
-        # loss = mse(truth_pose_list, ref_array) #.mse_loss
+        # loss1 = mse(truth_pose_list, ref_array) #.mse_loss
         # loss = mse(truth_pose_list, mean_ref_array) #.mse_loss
 
         # output = loss(truth_pose, ref_img) #.mse_loss
@@ -210,14 +211,15 @@ def train(sim, model, lr=0.001, num_iterations=1000):
         # else:
         loss1 = MMD_loss(truth_pose_list, ref_array)
         # create a distance matrix
-        # dist_sq = torch.cdist(truth_pose_list, truth_pose_list, p=2.0)
-        # this is the previous step's data, but let's see if it helps
-        edge_distances = my_sim.G.edata['w']
+        dist_sq = torch.cdist(truth_pose_list, truth_pose_list, p=2.0)
+        # gets the indices of the upper triangle (the distinct distance values)
+        ind = torch.triu_indices(dist_sq.shape[0],dist_sq.shape[1],1)
+        edge_distances = dist_sq[ind[0], ind[1]]
         loss2 = Distance_Penalty_loss(edge_distances, my_sim.G.num_edges()-my_sim.G.num_nodes() )
         # loss = Energy_loss(truth_pose_list, ref_array)
         # kldiv = nn.KLDivLoss()
-        # loss2 = kldiv(truth_pose_list, ref_array)
-        loss = loss2 + loss1
+        # loss1 = kldiv(truth_pose_list, ref_array)
+        loss = 100.*loss2 + loss1
         # train_acc = 0.
 
         # print(loss)
@@ -270,9 +272,9 @@ my_sim.plot(txt='init.', init=True)
 # plot for the loss history
 fig_h, axs_h = plt.subplots()
 
-num_epochs = 1
+num_epochs = 50
 for i in range(num_epochs):
-    loss_h = train(my_sim, model, lr=1e-3, num_iterations=int(1e3))
+    loss_h = train(my_sim, model, lr=1e-3, num_iterations=int(1e4))
     # if(i==num_epochs-1):
     my_sim.plot(txt='final_' + str(i), clear_first=True)
     my_sim.fig.savefig('iter' + str(i) + '.png')
