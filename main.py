@@ -146,12 +146,12 @@ def Energy_loss(x,y):
 
     return loss
 
-def Distance_Penalty_loss(x, ignore):
+def Distance_Penalty_loss(x):
     # zero distances mean self loops and they are constant per problem,
     # so this would just add a constant
     eps = 0.01
     # y = torch.where(x < eps, max_size*torch.ones_like(x), x)
-    y = x[:ignore]
+    # y = x[:ignore]
     y = torch.where(x < eps, eps*torch.ones_like(x), x)
 
     inv_x = torch.reciprocal(y)
@@ -215,7 +215,7 @@ def train(sim, model, lr=0.001, num_iterations=1000):
         # gets the indices of the upper triangle (the distinct distance values)
         ind = torch.triu_indices(dist_sq.shape[0],dist_sq.shape[1],1)
         edge_distances = dist_sq[ind[0], ind[1]]
-        loss2 = Distance_Penalty_loss(edge_distances, my_sim.G.num_edges()-my_sim.G.num_nodes() )
+        loss2 = Distance_Penalty_loss(edge_distances) #, my_sim.G.num_edges()-my_sim.G.num_nodes() )
         # loss = Energy_loss(truth_pose_list, ref_array)
         # kldiv = nn.KLDivLoss()
         # loss1 = kldiv(truth_pose_list, ref_array)
