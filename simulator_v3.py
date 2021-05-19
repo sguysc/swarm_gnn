@@ -28,11 +28,13 @@ class Simulator(object):
         self.ref_line = None
         self.init_line = None
 
+        # breakpoint()
+
         self.randomize(first_time=True)
         # self.create_graph()
 
     def randomize(self, first_time=False):
-        print('start randomizing')
+        # print('start randomizing')
         init_locations = []
         for rid in range(self.n):
             # sample an initial location for this robot. the -0.1 is so we don't have a robot on the max index
@@ -44,9 +46,10 @@ class Simulator(object):
             self.robots[rid,0] = rid
             self.robots[rid,1] = x
             self.robots[rid,2] = y
+            self.robots[rid,3:] = th.ones(self.memory_size, requires_grad=False)
             # self.map[x,y] = 1
 
-        print('done randomizing')
+        # print('done randomizing')
         self.map_list = self.robots[:,1:3]
         self.create_graph(first_time=first_time)
 
@@ -158,7 +161,7 @@ class Simulator(object):
         self.map_list = self.robots[:,1:3] + d_xy
         return self.map_list
 
-    def plot(self, ext_list=None, txt='', clear_first=False, init=False):
+    def plot(self, ext_list=None, txt='', clear_first=False, init=False, color='g'):
         if(ext_list is None):
             X = self.robots[:, 1:3]
         else:
@@ -168,14 +171,14 @@ class Simulator(object):
         if(init):
             if(self.init_line):
                 self.init_line.remove()
-            self.init_line = self.axs.scatter(X[:,1], X[:,0], marker='s', alpha=0.5, label=txt)
+            self.init_line = self.axs.scatter(X[:,1], X[:,0], marker='s', alpha=0.5, label=txt, c=color)
         elif(clear_first):
             if(self.last_line):
                 # self.init_line.remove()
                 self.last_line.remove()
-            self.last_line = self.axs.scatter(X[:,1], X[:,0], marker='s', alpha=0.5, label=txt)
+            self.last_line = self.axs.scatter(X[:,1], X[:,0], marker='s', alpha=0.5, label=txt, c=color)
         else:
-            self.ref_line = self.axs.scatter(X[:,1], X[:,0], marker='s', alpha=0.5, label=txt)
+            self.ref_line = self.axs.scatter(X[:,1], X[:,0], marker='s', alpha=0.5, label=txt, c=color)
 
         plt.xlabel("X")
         plt.ylabel("Y")

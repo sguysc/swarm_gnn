@@ -6,6 +6,7 @@ Created on Thu May 13 15:34:46 2021
 """
 
 import numpy as np
+import os
 # import dgl
 import torch
 import torch.nn as nn
@@ -13,6 +14,7 @@ import torch.nn.functional as F
 from dgl.nn import GraphConv
 import PIL.Image
 import matplotlib.pyplot as plt
+import imageio
 
 # import simulator as sim
 import simulator_v3 as sim
@@ -22,8 +24,9 @@ import simulator_v3 as sim
 np.random.seed(0)
 
 what_to_load = 0
-# load reference image, figure out how many robots needed
+save_intermediate_steps = True
 
+# load reference image, figure out how many robots needed
 max_size = 20
 if(what_to_load == 0):
     fname   = 'pic3.png'
@@ -37,9 +40,10 @@ if(what_to_load == 0):
     mean_ref_array = torch.tensor([torch.mean(ref_array[:,0]), torch.mean(ref_array[:,1])])
     # breakpoint()
 elif(what_to_load == 1):
-    max_size = 4
+    max_size = 5
     ref_img = torch.zeros(( max_size, max_size ))
-    ref_img[2,2:4] = 1
+    ref_img[2,1:3] = 1
+    ref_img[1,1:3] = 1
     number_of_robots = int(ref_img.sum())
     ref_array = torch.nonzero(ref_img).float()
 
@@ -65,9 +69,9 @@ step_size = torch.tensor(0.1)
 class GCN(nn.Module):
     def __init__(self, in_feats, h_feats1, h_feats2, num_outputs, dropout=0):
         super(GCN, self).__init__()
-        self.conv1 = GraphConv(in_feats, h_feats1) # GCNLayer
-        self.conv2 = GraphConv(h_feats1, h_feats2) # GCNLayer
-        self.conv3 = GraphConv(h_feats2, num_outputs) # GCNLayer
+        self.conv1 = GraphConv(in_feats, h_feats1, weight=True, bias=True) # GCNLayer
+        self.conv2 = GraphConv(h_feats1, h_feats2, weight=True, bias=True) # GCNLayer
+        self.conv3 = GraphConv(h_feats2, num_outputs, weight=True, bias=True) # GCNLayer
         if(dropout):
             self.dropout = nn.Dropout(p=dropout)
 
@@ -147,20 +151,22 @@ def Energy_loss(x,y):
     return loss
 
 def Distance_Penalty_loss(x):
+    # breakpoint()
     # zero distances mean self loops and they are constant per problem,
     # so this would just add a constant
     eps = 0.01
-    # y = torch.where(x < eps, max_size*torch.ones_like(x), x)
-    # y = x[:ignore]
     y = torch.where(x < eps, eps*torch.ones_like(x), x)
 
     inv_x = torch.reciprocal(y)
     # option 1: the sum of them should be minimized
     # loss = inv_x.sum()
     # breakpoint()
-    # option 2: the worst case of them should be minimzed
-    loss = nn.functional.softmax(inv_x).norm(dim=0)
+    # option 2: the worst case of them should be minimzed_
+    # loss = nn.functional.softmax(inv_x).norm(dim=0)
     # loss = inv_x.max()
+    loss = inv_x.sum()
+    # option 3
+    # loss = -x.min()
 
     return loss
 
@@ -178,19 +184,19 @@ def train(sim, model, lr=0.001, num_iterations=1000):
     # truth_pose_list = my_sim.get_state_list()
     for e in range(num_iterations):
         # get the new graph
+        # breakpoint()
         g = sim.G
         features = g.ndata['data']
-
+        # print('features have %d nonzero elements' %features.nonzero().sum())
         # Forward
         logits = model(g, features)
         # first two are dx, dy. the rest is d_data
-        # d_xy    =  torch.sigmoid( logits[:,0:2] ) - 0.5  # torch.sign(
-        d_x    =  1.0*torch.sigmoid( step_size * logits[:,0] ) - 0.5 #  step_size *
-        d_y    =  1.0*torch.sigmoid( step_size * logits[:,1] ) - 0.5  # step_size *
-        d_data = logits[:,2:]
-
+        d_x    =  2.0*torch.sigmoid( step_size*logits[:,0] ) - 1.0 #  step_size *
+        d_y    =  2.0*torch.sigmoid( step_size*logits[:,1] ) - 1.0  # step_size *
+        d_data =  2.0*torch.sigmoid( step_size*logits[:,2:] ) - 1.0 #logits[:,2:]
+        # breakpoint()
         # get the new poses with the gradients
-        truth_pose_list = my_sim.get_new_state_list( 1.0*torch.sigmoid( step_size *logits[:,0:2] ) - 0.5)
+        truth_pose_list = sim.get_new_state_list( 2.0*torch.sigmoid( step_size*logits[:,0:2] ) - 1.0)
 
         # Compute loss
         # Note that you should only compute the losses of the nodes in the training set.
@@ -209,17 +215,20 @@ def train(sim, model, lr=0.001, num_iterations=1000):
         # if(e % 2 == 1):
         #     loss, vals = NN_loss(truth_pose_list, ref_array)
         # else:
-        loss1 = MMD_loss(truth_pose_list, ref_array)
+        # loss1 = MMD_loss(truth_pose_list, ref_array)
+        # if(e == 49):
+        #     breakpoint()
         # create a distance matrix
         dist_sq = torch.cdist(truth_pose_list, truth_pose_list, p=2.0)
         # gets the indices of the upper triangle (the distinct distance values)
         ind = torch.triu_indices(dist_sq.shape[0],dist_sq.shape[1],1)
         edge_distances = dist_sq[ind[0], ind[1]]
         loss2 = Distance_Penalty_loss(edge_distances) #, my_sim.G.num_edges()-my_sim.G.num_nodes() )
-        # loss = Energy_loss(truth_pose_list, ref_array)
-        # kldiv = nn.KLDivLoss()
-        # loss1 = kldiv(truth_pose_list, ref_array)
-        loss = 100.*loss2 + loss1
+        # loss1 = Energy_loss(truth_pose_list, ref_array)
+        kldiv = nn.KLDivLoss()
+        loss1 = kldiv(truth_pose_list, ref_array)
+        loss = 1.0*loss2 + loss1
+        # loss = loss1
         # train_acc = 0.
 
         # print(loss)
@@ -239,14 +248,19 @@ def train(sim, model, lr=0.001, num_iterations=1000):
         # Backward
         optimizer.zero_grad()
         if(e == 0):
-            loss.backward(retain_graph=True)
+            # loss.backward(retain_graph=True)
+            loss.backward()
         else:
             loss.backward()
         optimizer.step()
 
         # now that we've done computing the loss with gradients, update the simulation.
         # the features are not supposed to have gradients
-        my_sim.update(d_x, d_y, d_data)
+        sim.update(d_x, d_y, d_data)
+        if(save_intermediate_steps==True):
+            if 1: #e % 50 == 0:
+                sim.plot(txt='step_' + str(i), clear_first=True, color='g')
+                sim.fig.savefig('intermediate/step_' + str(e) + '.png')
 
         if e % 50 == 0:
             print('In epoch {}, loss: {:.3f}'.format(
@@ -259,6 +273,16 @@ def train(sim, model, lr=0.001, num_iterations=1000):
 
 # gcn_msg = fn.copy_src(src='h', out='m')
 # gcn_reduce = fn.sum(msg='m', out='h')
+plt.close('all')
+hdir = 'intermediate'
+if(not os.path.exists(hdir)):
+    os.mkdir(hdir)
+    print("Directory created")
+else:
+    # clear old data
+    for f in os.listdir(hdir):
+        os.remove(os.path.join(hdir, f))
+    print('removed old files')
 
 # create the simulator
 my_sim = sim.Simulator(num_robots=number_of_robots, memory_size=32, \
@@ -267,16 +291,16 @@ my_sim = sim.Simulator(num_robots=number_of_robots, memory_size=32, \
 # breakpoint()
 outputs = 2 + my_sim.memory_size # dx, dy, d_data
 model = GCN(my_sim.G.ndata['data'].shape[1], 128, 128, outputs, dropout=0.2)
-my_sim.plot(ext_list=ref_array, txt='ref.')
-my_sim.plot(txt='init.', init=True)
+my_sim.plot(ext_list=ref_array, txt='ref.', color='b')
+my_sim.plot(txt='init.', init=True, color='r')
 # plot for the loss history
 fig_h, axs_h = plt.subplots()
 
-num_epochs = 50
+num_epochs = 1
 for i in range(num_epochs):
-    loss_h = train(my_sim, model, lr=1e-3, num_iterations=int(1e4))
+    loss_h = train(my_sim, model, lr=1e-4, num_iterations=int(10e1))
     # if(i==num_epochs-1):
-    my_sim.plot(txt='final_' + str(i), clear_first=True)
+    my_sim.plot(txt='final_' + str(i), clear_first=True, color='g')
     my_sim.fig.savefig('iter' + str(i) + '.png')
 
     axs_h.plot(loss_h, label='iter_'+str(i) )
@@ -290,3 +314,11 @@ for i in range(num_epochs):
 plt.xlabel("iterations")
 plt.ylabel("loss")
 plt.legend(loc='upper left')
+
+# breakpoint()
+if(save_intermediate_steps):
+    with imageio.get_writer(os.path.join(hdir, 'movie.gif'), mode='I', duration = .4) as writer:
+        num_files = len(os.listdir(hdir)) - 1
+        for filename in range(num_files):
+            image = imageio.imread(os.path.join(hdir, 'step_%d.png'%filename))
+            writer.append_data(image)
