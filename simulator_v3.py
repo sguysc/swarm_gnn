@@ -25,26 +25,13 @@ class Simulator(object):
 
         self.fig, self.axs = plt.subplots()
         self.last_line = None
+        self.ref_line = None
+        self.init_line = None
 
-        self.randomize()
-        # init_locations = []
-        # for rid in range(num_robots):
-        #     # sample an initial location for this robot. the -0.1 is so we don't have a robot on the max index
-        #     [x, y] = np.random.randint(0, max_x, 2)
-        #     while([x,y] in init_locations):
-        #         [x, y] = np.random.randint(0, max_x, 2)
-        #     init_locations.append([x, y])
-
-        #     self.robots[rid,0] = rid
-        #     self.robots[rid,1] = x
-        #     self.robots[rid,2] = y
-        #     # self.map[x,y] = 1
-
-        # self.map_list = self.robots[:,1:3]
-
+        self.randomize(first_time=True)
         # self.create_graph()
 
-    def randomize(self):
+    def randomize(self, first_time=False):
         print('start randomizing')
         init_locations = []
         for rid in range(self.n):
@@ -58,11 +45,10 @@ class Simulator(object):
             self.robots[rid,1] = x
             self.robots[rid,2] = y
             # self.map[x,y] = 1
-        self.create_graph()
 
         print('done randomizing')
         self.map_list = self.robots[:,1:3]
-        self.create_graph(first_time=False)
+        self.create_graph(first_time=first_time)
 
     def create_graph(self, first_time=True):
         # get all current locations.
@@ -76,14 +62,16 @@ class Simulator(object):
         # self.Gnx = nx.from_numpy_matrix(dist_sq)
         # self.G = dgl.from_networkx(self.Gnx)
         # option 2:
+        # breakpoint()
         X = self.robots[:, 1:3]
         # create a distance matrix
         dist_sq = th.cdist(X, X, p=2.0)
         # adjacency matrix
-        adj_matrix = th.where(dist_sq <= self.range_len, dist_sq, th.zeros_like(dist_sq))
-        adj_matrix = th.where(adj_matrix > 0., th.ones_like(dist_sq), adj_matrix)
+        adj_matrix = th.where(dist_sq <= self.range_len, th.ones_like(dist_sq), th.zeros_like(dist_sq)) # th.zeros_like(dist_sq))
+        # adj_matrix = th.where(dist_sq <= self.range_len, dist_sq, -1.0*th.ones_like(dist_sq)) # th.zeros_like(dist_sq))
+        # adj_matrix = th.where(adj_matrix >= 0., th.ones_like(dist_sq), th.zeros_like(dist_sq))
         # list of nodes connected
-        conn_nodes = th.nonzero(adj_matrix)
+        conn_nodes = th.nonzero(adj_matrix>0.5)
         if(first_time):
             # create a graph, src nodes -> dest nodes. they are bi-directional
             self.G = dgl.graph((conn_nodes[:,0], conn_nodes[:,1]))
@@ -115,6 +103,7 @@ class Simulator(object):
         try:
             self.G.ndata['h']  = self.robots[:, 3:].detach()
         except:
+            print('all robots are too far appart, the graph is empty')
             breakpoint()
 
         # else:
@@ -169,20 +158,24 @@ class Simulator(object):
         self.map_list = self.robots[:,1:3] + d_xy
         return self.map_list
 
-    def plot(self, ext_list=None, txt='', clear_first=False):
+    def plot(self, ext_list=None, txt='', clear_first=False, init=False):
         if(ext_list is None):
             X = self.robots[:, 1:3]
         else:
             X = ext_list
 
         # self.axs.clear()
-        if(clear_first):
+        if(init):
+            if(self.init_line):
+                self.init_line.remove()
+            self.init_line = self.axs.scatter(X[:,1], X[:,0], marker='s', alpha=0.5, label=txt)
+        elif(clear_first):
             if(self.last_line):
-                # line = self.last_line.pop(0)
+                # self.init_line.remove()
                 self.last_line.remove()
             self.last_line = self.axs.scatter(X[:,1], X[:,0], marker='s', alpha=0.5, label=txt)
         else:
-            self.axs.scatter(X[:,1], X[:,0], marker='s', alpha=0.5, label=txt)
+            self.ref_line = self.axs.scatter(X[:,1], X[:,0], marker='s', alpha=0.5, label=txt)
 
         plt.xlabel("X")
         plt.ylabel("Y")
