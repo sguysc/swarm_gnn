@@ -31,8 +31,13 @@ what_to_load = 1
 save_intermediate_steps = False
 load_checkpoint_model = True
 
-# load reference image, figure out how many robots needed
 max_size = 20
+num_epochs = 10000
+num_of_nn=3
+step_size = th.tensor(0.1)
+lr = 1e-4
+
+# load reference image, figure out how many robots needed
 if(what_to_load == 0):
     fname   = 'pic3.png'
     ref_img = PIL.Image.open(fname)
@@ -54,7 +59,6 @@ elif(what_to_load == 1):
     ref_array = th.nonzero(ref_img).float()
     mean_ref_array = th.tensor([th.mean(ref_array[:,0]), th.mean(ref_array[:,1])])
 
-num_of_nn=3
 # ref_array = th.zeros((ref_array1.shape[0], ref_array1.shape[1]+num_of_nn*2 ))
 # ref_array[:, :2] = th.clone( ref_array1 )
 # X = ref_array[:, :2]
@@ -67,24 +71,8 @@ num_of_nn=3
 #     ref_array[:, j+1 ] = X[knn.indices[:, n+1], 1] - ref_array[:, 1 ] # dy
 #     j += 2
 
-step_size = th.tensor(0.1)
 
 # th.autograd.set_detect_anomaly(True)
-
-# class GCNLayer(nn.Module):
-#     def __init__(self, in_feats, out_feats):
-#         super(GCNLayer, self).__init__()
-#         self.linear = nn.Linear(in_feats, out_feats)
-
-#     def forward(self, g, feature):
-#         # Creating a local scope so that all the stored ndata and edata
-#         # (such as the `'h'` ndata below) are automatically popped out
-#         # when the scope exits.
-#         with g.local_scope():
-#             g.ndata['h'] = feature
-#             g.update_all(gcn_msg, gcn_reduce)
-#             h = g.ndata['h']
-#             return self.linear(h)
 
 class GCN(nn.Module):
     def __init__(self, in_feats, h_feats1, h_feats2, num_outputs, dropout=0):
@@ -192,10 +180,8 @@ def Distance_Penalty_loss(x):
 
     return loss
 
-def train(sim, model, lr=0.001, num_iterations=1000, save_intermediate=False):
+def train(sim, model, num_iterations=1000, save_intermediate=False):
     loss_history = np.zeros(num_iterations)
-
-    optimizer = th.optim.Adam(model.parameters(), lr=lr)
 
     for e in range(num_iterations):
         # get the new graph
@@ -316,7 +302,10 @@ my_sim = sim.Simulator(num_robots=number_of_robots, memory_size=32, \
 
 # breakpoint()
 outputs = 2 + my_sim.memory_size # dx, dy, d_data
-model = GCN(my_sim.G.ndata['data'].shape[1], 128, 128, outputs, dropout=0.2)
+model = GCN(my_sim.G.ndata['data'].shape[1], 64, 128, outputs, dropout=0.2)
+optimizer = th.optim.Adam(model.parameters(), lr=lr)
+scheduler = th.optim.lr_scheduler.ExponentialLR(optimizer, gamma=0.9)
+
 if(load_checkpoint_model):
     if(os.path.exists('checkpoint_model.pt')):
         checkpoint = th.load('checkpoint_model.pt')
@@ -331,13 +320,13 @@ my_sim.plot(txt='init.', init=True, color='r')
 # plot for the loss history
 fig_h, axs_h = plt.subplots()
 
-num_epochs = 10
+
 save_intermediate = save_intermediate_steps
 for i in range(num_epochs):
     if(i==num_epochs-1):
         # save the last epoch
         save_intermediate = True
-    loss_h = train(my_sim, model, lr=1e-4, num_iterations=int(10e1), save_intermediate=save_intermediate)
+    loss_h = train(my_sim, model, num_iterations=int(10e1), save_intermediate=save_intermediate)
     # if(i==num_epochs-1):
     my_sim.plot(txt='final_' + str(i), clear_first=True, color='g')
     # my_sim.fig.savefig('iter' + str(i) + '.png')
@@ -350,6 +339,8 @@ for i in range(num_epochs):
     my_sim.randomize(keep_init=True)
     my_sim.plot(txt='init.', init=True)
     print('finished epoch #%d' %(i))
+
+    scheduler.step() # get ready for next iteration
 
 plt.xlabel("iterations")
 plt.ylabel("loss")
