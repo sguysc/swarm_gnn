@@ -11,7 +11,9 @@ import os
 import torch as th
 import torch.nn as nn
 import torch.nn.functional as F
+from dgl.nn.pytorch import Sequential
 from dgl.nn import GraphConv
+import dgl.function as fn
 import PIL.Image
 import matplotlib.pyplot as plt
 import imageio
@@ -27,19 +29,20 @@ warnings.filterwarnings("ignore")
 # np.random.seed(0)
 np.random.seed(1)
 
-what_to_load = 1
+what_to_load = 0
 save_intermediate_steps = False
 load_checkpoint_model = True
 
 max_size = 20
-num_epochs = 10000
-num_of_nn=3
+num_epochs = 1000
+num_of_nn=8
 step_size = th.tensor(0.1)
 lr = 1e-4
+num_iterations=int(100)
 
 # load reference image, figure out how many robots needed
 if(what_to_load == 0):
-    fname   = 'pic3.png'
+    fname   = 'pic1.png'
     ref_img = PIL.Image.open(fname)
     ref_img.thumbnail((max_size, max_size), PIL.Image.ANTIALIAS)
     ref_img = 1.0-np.float32(ref_img)
@@ -73,6 +76,19 @@ elif(what_to_load == 1):
 
 
 # th.autograd.set_detect_anomaly(True)
+class MessageLayer(nn.Module):
+    def __init__(self):
+        super().__init__()
+
+    def forward(self, graph, n_feat):
+        with graph.local_scope():
+            graph.ndata['h'] = n_feat
+            graph.update_all(fn.copy_u('h', 'm'), fn.sum('m', 'h'))
+            n_feat += graph.ndata['h']
+            # graph.apply_edges(fn.u_add_v('h', 'h', 'e'))
+            # e_feat += graph.edata['e']
+
+            return n_feat #, e_feat
 
 class GCN(nn.Module):
     def __init__(self, in_feats, h_feats1, h_feats2, num_outputs, dropout=0):
@@ -80,12 +96,15 @@ class GCN(nn.Module):
         # self.conv1 = GraphConv(in_feats, h_feats1, weight=True, bias=True) # GCNLayer
         # self.conv2 = GraphConv(h_feats1, h_feats2, weight=True, bias=True) # GCNLayer
         # self.conv3 = GraphConv(h_feats2, num_outputs, weight=True, bias=True) # GCNLayer
+        self.msg_net = Sequential(MessageLayer(), MessageLayer(), MessageLayer())
         self.conv1 = GraphConv(in_feats, h_feats1, weight=True, bias=True) # GCNLayer
         self.conv3 = GraphConv(h_feats1, num_outputs, weight=True, bias=True) # GCNLayer
         if(dropout):
             self.dropout = nn.Dropout(p=dropout)
 
     def forward(self, g, in_feat):
+        in_feat = self.msg_net(g, in_feat)
+
         h = self.conv1(g, in_feat)
         if(self.dropout):
             h = self.dropout(h)
@@ -182,7 +201,7 @@ def Distance_Penalty_loss(x):
 
 def train(sim, model, num_iterations=1000, save_intermediate=False):
     loss_history = np.zeros(num_iterations)
-
+    loss = th.tensor(0).float()
     for e in range(num_iterations):
         # get the new graph
         # breakpoint()
@@ -239,7 +258,8 @@ def train(sim, model, num_iterations=1000, save_intermediate=False):
         # loss1 = Energy_loss(truth_pose_list, ref_array)
         kldiv = nn.KLDivLoss()
         loss1 = kldiv(truth_pose_list, ref_array)
-        loss = loss2 + loss1 + loss3
+
+        loss += loss2 + loss1 + loss3
         # loss = loss1
         # train_acc = 0.
 
@@ -258,13 +278,12 @@ def train(sim, model, num_iterations=1000, save_intermediate=False):
         #     best_test_acc = test_acc
 
         # Backward
-        optimizer.zero_grad()
-        if(e == 0):
+        if(e % 5 == 4):
+            optimizer.zero_grad()
             # loss.backward(retain_graph=True)
             loss.backward()
-        else:
-            loss.backward()
-        optimizer.step()
+            optimizer.step()
+            loss = th.tensor(0).float()
 
         # now that we've done computing the loss with gradients, update the simulation.
         # the features are not supposed to have gradients
@@ -326,7 +345,7 @@ for i in range(num_epochs):
     if(i==num_epochs-1):
         # save the last epoch
         save_intermediate = True
-    loss_h = train(my_sim, model, num_iterations=int(10e1), save_intermediate=save_intermediate)
+    loss_h = train(my_sim, model, num_iterations=num_iterations, save_intermediate=save_intermediate)
     # if(i==num_epochs-1):
     my_sim.plot(txt='final_' + str(i), clear_first=True, color='g')
     # my_sim.fig.savefig('iter' + str(i) + '.png')
